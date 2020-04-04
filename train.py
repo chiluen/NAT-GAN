@@ -227,7 +227,7 @@ def main(args, init_distributed = False):
             logger.info('Training on Discriminator for ' + str(args.train_D_times_per_epoch) + " times")
             for i in range(args.train_D_times_per_epoch):
                 train_D(args, trainer, task, epoch_itr, Discriminator, progress)  #train for discriminator
-            torch.save(Discriminator.model.state_dict(), os.path.join('./discriminator_model',"param_"+str(epoch_itr.epoch)+".pkl"))
+            torch.save(Discriminator.model.state_dict(), os.path.join('./NAT-GAN/discriminator_model',"param_"+str(epoch_itr.epoch)+".pkl"))
 
         loss_per_epoch.append(stats['loss']) # record loss
 
