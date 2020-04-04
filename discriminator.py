@@ -56,35 +56,8 @@ class FairseqRNNClassifier(BaseFairseqModel):
 
         return output
 
-class LSTM(BaseFairseqModel):
-    def __init__(self, input_size, output_size, hidden_size, input_vocab):
-        super().__init__()
-        self.input_vocab = input_vocab
-        self.input_size = input_size  #在seq2seq NLP, 這就是len(input_vocab)
-        self.output_size = output_size
-        self.hidden_size = hidden_size
 
-        self.lstm = nn.LSTM(input_size, hidden_size, 1)  #LSTM(數據向量, 隱藏元向量, number of layer)
-        self.linear = nn.Linear(hidden_size, output_size)
-        #self.one_hot_inputs = torch.eye(len(input_vocab))
-        self.register_buffer('one_hot_inputs', torch.eye(len(input_vocab)))
-    def init_hidden(self, bsz):
-        h0 = torch.randn(1, bsz, self.hidden_size) #1是指number of layer
-        c0 = torch.randn(1, bsz, self.hidden_size)
-        return h0, c0
-
-    def forward(self, src_tokens):
-        bsz, _ = src_tokens.size()
-        h0, c0 = self.init_hidden(bsz)
-        input = self.one_hot_inputs[src_tokens.long()]# (bsz, seq-len, vocab-len)
-        input = input.permute(1,0,2) #(seq-len, bsz, vocab-len)
-        input = input.to(src_tokens.device)
-
-        output, _ = self.lstm(input, (h0,c0))
-        output = self.linear(output[-1], self.output_size) #這邊output[-1]其實就是hn
-        return output
-
-class Discriminator():
+class RNN_Discriminator():
     def __init__(self, input_size, output_size, hidden_size, input_vocab):
         self.input_size = input_size
         self.output_size = output_size
@@ -111,6 +84,87 @@ class Discriminator():
         output_D = self.model(target_G)
         #這邊錯誤的標籤用-1去做, 不要用0, 解決資訊問題
         output_D_target = torch.full([output_D.shape[0],1],-1).cuda() 
+        loss = loss_function(output_D, output_D_target)
+        loss.backward()
+        optimizer.step()
+
+##LSTM discriminator
+
+class LSTM(BaseFairseqModel):
+    def __init__(self, input_size, output_size, hidden_size, input_vocab):
+        super().__init__()
+        """
+        在seq2seq NLP:
+        input_size = 1 #只有一維, 代表純粹用數字去代表
+        output_size = 1 
+        hidden_size = 10 #h的維度
+        input_vocab = vocabulary
+        """
+        self.input_size = input_size  
+        self.output_size = output_size
+        self.hidden_size = hidden_size
+        self.input_vocab = input_vocab
+
+        self.lstm = nn.LSTM(input_size, hidden_size, 1)  #LSTM(數據向量, 隱藏元向量, number of layer)
+        self.linear_1 = nn.Linear(hidden_size, 5)
+        self.linear_2 = nn.Linear(5, output_size)
+        self.layernorm = nn.LayerNorm(normalized_shape = 5)
+        self.sigmoid = nn.Sigmoid()
+
+    def init_hidden(self, bsz, device):
+        h0 = torch.randn(1, bsz, self.hidden_size, device=device) #1是指number of layer
+        c0 = torch.randn(1, bsz, self.hidden_size, device=device)
+        return h0, c0
+
+    def forward(self, src_tokens):
+        bsz, max_src_len = src_tokens.size()
+        h0, c0 = self.init_hidden(bsz, src_tokens.device)
+        input = src_tokens.float().permute(1,0) #(seq-len, bsz)
+        input = input.unsqueeze(-1)
+        input = input.to(src_tokens.device)
+
+        output, _ = self.lstm(input, (h0,c0)) # output dimension: (seq-len, bsz, hidden_size)
+        hn = output[-1] # bsz,hidden_size
+        output = []
+        for i in range(bsz): #根據batch去output
+            hn_temp = self.linear_1(hn[i])
+            hn_temp = self.layernorm(hn_temp)
+            hn_temp = self.linear_2(hn_temp)
+            hn_temp = self.sigmoid(hn_temp) #轉到(0,1)
+            hn_temp = 2*(hn_temp-0.5) #轉到(-1,1)
+
+            output.append(hn_temp)
+        output = torch.tensor(output, device=src_tokens.device, requires_grad=True)
+        
+        return output
+
+class LSTM_Discriminator():
+    def __init__(self, input_size, output_size, hidden_size, input_vocab):
+        self.input_size = input_size
+        self.output_size = output_size
+        self.hidden_size = hidden_size
+        self.input_vocab = input_vocab
+        self.model = LSTM(input_size, output_size, hidden_size, input_vocab).cuda()
+
+  #在train時, 直接吃target sentence
+    def train(self, target_Real, target_G):  
+        optimizer = torch.optim.Adam(self.model.parameters())
+        loss_function = nn.BCEWithLogitsLoss(reduction='mean') #這個先暫時用
+        self.model.train()
+
+    #先進行target_real
+        optimizer.zero_grad()
+        output_D = self.model(target_Real)
+        output_D_target = torch.full([output_D.shape[0]],1).cuda()
+        loss = loss_function(output_D, output_D_target)
+        loss.backward()
+        optimizer.step()
+
+        #再進行target_G
+        optimizer.zero_grad()
+        output_D = self.model(target_G)
+        #這邊錯誤的標籤用-1去做, 不要用0, 解決資訊問題
+        output_D_target = torch.full([output_D.shape[0]],-1).cuda() 
         loss = loss_function(output_D, output_D_target)
         loss.backward()
         optimizer.step()

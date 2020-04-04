@@ -17,8 +17,8 @@ from fairseq.utils import new_arange
 from fairseq.tasks import register_task
 from fairseq.tasks.translation import TranslationTask, load_langpair_dataset
 
-from NAT_GAN.criterion_GAN import criterion_GAN
-
+#from NAT_GAN.criterion_GAN import criterion_GAN
+from criterion_GAN import criterion_GAN
 
 def train_step_GAN(args, trainer, samples, discriminator,raise_oom=False):
     """Do forward, backward and parameter update."""
@@ -189,7 +189,6 @@ def train_step_task(args,
 
     model.train()
     sample['prev_target'] = task.inject_noise(sample['target'])
-    #loss, sample_size, logging_output = criterion(model, sample)
     loss, sample_size, logging_output = criterion_GAN(args, model, discriminator,sample, task)
     if ignore_grad:
         loss *= 0

@@ -1,3 +1,6 @@
 __pycache__
 
 loss_file
+
+/checkpoints/*.pt
+/discriminator_model/*.pkl

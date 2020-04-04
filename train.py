@@ -16,8 +16,10 @@ from fairseq.trainer import Trainer
 from fairseq.meters import StopwatchMeter
 
 ##從其他地方去import
-from NAT_GAN.discriminator import Discriminator
-from NAT_GAN.train_process import train_step_GAN
+#from NAT_GAN.discriminator import RNN_Discriminator, LSTM_Discriminator
+#from NAT_GAN.train_process import train_step_GAN
+from discriminator import RNN_Discriminator, LSTM_Discriminator
+from train_process import train_step_GAN
 
 
 #for validation loss
@@ -142,7 +144,7 @@ def main(args, init_distributed = False):
 
     model = task.build_model(args)  #先傳到tasks/translation
     criterion = task.build_criterion(args) #這邊的build_criterion的位置在fairseq/fairseq/tasks/fairseq_task.py/
-    #logger.info(model) #顯示model資訊, 很煩
+    
     logger.info('model {}, criterion {}'.format(args.arch, criterion.__class__.__name__))
     logger.info('num. model params: {} (num. trained: {})'.format(
         sum(p.numel() for p in model.parameters()),
@@ -167,12 +169,14 @@ def main(args, init_distributed = False):
     train_meter.start()
     valid_subsets = args.valid_subset.split(',')
 
-
-    input_size = len(task.target_dictionary)
+    # construct LSTM discriminator
+    input_size = 1 #len(task.target_dictionary)
     output_size = 1
-    hidden_size = 10
+    hidden_size = 50
     input_vocab = task.target_dictionary
-    RNN_Discriminator = Discriminator(input_size, output_size, hidden_size, input_vocab)
+    Discriminator = LSTM_Discriminator(input_size, output_size, hidden_size, input_vocab)
+    if args.discriminator_path != '':
+        Discriminator.model.load_state_dict(torch.load(args.discriminator_path))
 
     #紀錄每一個epoch的loss
     loss_per_epoch = []
@@ -203,28 +207,27 @@ def main(args, init_distributed = False):
             else args.update_freq[-1]
         )
         itr = iterators.GroupedIterator(itr, update_freq)
-        progress = progress_bar.build_progress_bar( #這邊還沒動到 -> #已處理
+        progress = progress_bar.build_progress_bar( 
             args, itr, epoch_itr.epoch, no_progress_bar='simple',
         )
+        args.current_epoch = epoch_itr.epoch 
 
         #pretrain for discriminator
         if args.pretrain_D_times > 0:
-            logger.info('Pretrain' + str(args.pretrain_D_times) + 'for discriminator')
+            logger.info('Pretrain ' + str(args.pretrain_D_times) + ' for discriminator')
             for i in range(args.pretrain_D_times):
-                train_D(args, trainer, task, epoch_itr, RNN_Discriminator, progress)
-            args.pretrain_D_times = 0 #Ending
+                train_D(args, trainer, task, epoch_itr, Discriminator, progress)
+            args.pretrain_D_times = 0 #Ending pretrain
 
-
-
-
-        #Training for one epoch
-        stats = train_G(args, trainer, task, epoch_itr, RNN_Discriminator, progress)  #train for generator
+        #Training generator for one epoch
+        stats = train_G(args, trainer, task, epoch_itr, Discriminator, progress)  #train for generator
         
         #train discriminator n_times for one epoch
         if args.only_G == False:
-            logger.info('Training on Discriminator for' + str(args.train_D_times_per_epoch) + "times")
+            logger.info('Training on Discriminator for ' + str(args.train_D_times_per_epoch) + " times")
             for i in range(args.train_D_times_per_epoch):
-                train_D(args, trainer, task, epoch_itr, RNN_Discriminator, progress)  #train for discriminator
+                train_D(args, trainer, task, epoch_itr, Discriminator, progress)  #train for discriminator
+            torch.save(Discriminator.model.state_dict(), os.path.join('./discriminator_model',"param_"+str(epoch_itr.epoch)+".pkl"))
 
         loss_per_epoch.append(stats['loss']) # record loss
 
@@ -277,6 +280,14 @@ def main(args, init_distributed = False):
 def train_D(args, trainer, task, epoch_itr, discriminator, progress):
     """Train the discriminator for one epoch"""
 
+    def change_output2target(outputs, batch_size): 
+        outputs = outputs['word_ins']['out']
+        outputs_argmax = torch.max(outputs[0], dim = 1)[1].reshape(1,-1)
+        for i in range(1, batch_size):
+            indice = torch.max(outputs[i], dim = 1)[1].reshape(1,-1)
+            outputs_argmax = torch.cat((outputs_argmax, indice))
+        return outputs_argmax
+
     generator = trainer.model
     
     for samples in progress:
@@ -292,12 +303,8 @@ def train_D(args, trainer, task, epoch_itr, discriminator, progress):
             tgt_tokens, prev_output_tokens = sample["target"], sample["prev_target"]
             outputs = generator(src_tokens, src_lengths, prev_output_tokens, tgt_tokens) 
 
-        #把outputs換成可以被discriminator吃的東西
-            outputs_argmax = outputs['word_ins']['out']
-            outputs_argmax = torch.max(outputs_argmax[0], dim = 1)[1].reshape(1,-1)
-            for i in range(1,outputs_argmax.shape[0]):
-                indice = torch.max(outputs_argmax[i], dim = 1)[1].reshape(1,-1)
-                outputs_argmax = torch.cat((outputs_argmax, indice))
+            #把outputs換成可以被discriminator吃的東西
+            outputs_argmax = change_output2target(outputs, src_tokens.shape[0])
 
             #把tgt與outputs吃進去, 做training
             discriminator.train(tgt_tokens, outputs_argmax)
@@ -357,7 +364,6 @@ if __name__ == '__main__':
     #dealing with argparse
     
     parser = ArgumentParser()
-    parser.add_argument('--max-tokens', type=int, default = 8000)
     parser.add_argument('--max-sentences', type = int)
     parser.add_argument('--device-id', type=int, default = 0)
     parser.add_argument('--seed', type=int, default = 1)
@@ -366,7 +372,6 @@ if __name__ == '__main__':
     parser.add_argument('--task', type = str, default = 'translation_lev')
     parser.add_argument('--left-pad-source', action='store_false')
     parser.add_argument('--left-pad-target', action='store_true')
-    parser.add_argument('--data', type = str)  ##必輸入
     parser.add_argument('--source-lang', type=str, default = 'de')
     parser.add_argument('--target-lang', type=str, default = 'en')
     parser.add_argument('--valid-subset', type = str, default = 'valid')
@@ -450,15 +455,16 @@ if __name__ == '__main__':
 
     #save for loss and valid loss
     # & other options
+    parser.add_argument('--data', type = str) 
+    parser.add_argument('--max-tokens', type=int, default = 4000) 
     parser.add_argument('--save-loss-dir', type = str)  #要放絕對路徑
     parser.add_argument('--only-G', action = 'store_true') #用來只train Generator
     parser.add_argument('--pretrain-D-times', type = int, default = 0)
     parser.add_argument('--train-D-times-per-epoch', type = int, default = 1)
+    parser.add_argument('--discriminator-path', type = str, default = '') #loading trained discriminator
+    parser.add_argument('--current-epoch', type = int, default=0) #for convenient
+    parser.add_argument('--apply-reward-scalar', action = 'store_true')
 
 
-
-    #args = parser.parse_args(args=[])用在jupyter notebook才這樣
-    #args.data = "/content/mydrive/My Drive/Colab Notebooks/wmt14_ende_distilled"
-    #args.save_loss_dir = '/content'
     args = parser.parse_args()
     main(args)
