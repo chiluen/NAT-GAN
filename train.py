@@ -197,6 +197,7 @@ def main(args, init_distributed = False):
         ###Train for one epoch###
 
         # Initialize data iterator
+        # Initialize for discriminator
         itr = epoch_itr.next_epoch_itr(
             fix_batches_to_gpus=args.fix_batches_to_gpus,
             shuffle=(epoch_itr.epoch >= args.curriculum),
@@ -212,12 +213,41 @@ def main(args, init_distributed = False):
         )
         args.current_epoch = epoch_itr.epoch 
 
+        #Progress只要使用就會消失
+        #新增一個list讓progress在每個epoch都保存
+        progress_list = [] #新建與清空內存
+        progress_counter = 0 #只用前一萬個train discriminator, 以防overfitting
+        for samples in progress:
+            progress_list.append(samples)
+            progress_counter += 1
+            if progress_counter == 10000:
+                break
+        logger.info("Complete the progress_list")
+
+        ##Construct progress for generator
+        itr = epoch_itr.next_epoch_itr(
+            fix_batches_to_gpus=args.fix_batches_to_gpus,
+            shuffle=(epoch_itr.epoch >= args.curriculum),
+        )
+        update_freq = (
+            args.update_freq[epoch_itr.epoch - 1]
+            if epoch_itr.epoch <= len(args.update_freq)
+            else args.update_freq[-1]
+        )
+        itr = iterators.GroupedIterator(itr, update_freq)
+        progress = progress_bar.build_progress_bar( 
+            args, itr, epoch_itr.epoch, no_progress_bar='simple',
+        )
+
         #pretrain for discriminator
         if args.pretrain_D_times > 0:
             logger.info('Pretrain ' + str(args.pretrain_D_times) + ' for discriminator')
             for i in range(args.pretrain_D_times):
-                train_D(args, trainer, task, epoch_itr, Discriminator, progress)
+                train_D(args, trainer, task, epoch_itr, Discriminator, progress_list)
+                logger.info('Pretrain on Discriminator for ' + str(i) + " times")
+
             args.pretrain_D_times = 0 #Ending pretrain
+
 
         #Training generator for one epoch
         stats = train_G(args, trainer, task, epoch_itr, Discriminator, progress)  #train for generator
@@ -226,11 +256,10 @@ def main(args, init_distributed = False):
         if args.only_G == False:
             logger.info('Training on Discriminator for ' + str(args.train_D_times_per_epoch) + " times")
             for i in range(args.train_D_times_per_epoch):
-                train_D(args, trainer, task, epoch_itr, Discriminator, progress)  #train for discriminator
+                train_D(args, trainer, task, epoch_itr, Discriminator, progress_list)  #train for discriminator
             torch.save(Discriminator.model.state_dict(), os.path.join('./NAT-GAN/discriminator_model',"param_"+str(epoch_itr.epoch)+".pkl"))
 
         loss_per_epoch.append(stats['loss']) # record loss
-
 
         #用validate_interval去控制多少epoch後要去算validate
         if not args.disable_validation and epoch_itr.epoch % args.validate_interval == 0:
