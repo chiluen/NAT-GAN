@@ -211,16 +211,19 @@ def main(args, init_distributed = False):
         progress = progress_bar.build_progress_bar( 
             args, itr, epoch_itr.epoch, no_progress_bar='simple',
         )
+
         args.current_epoch = epoch_itr.epoch 
+        torch.multiprocessing.set_sharing_strategy('file_system') ##fix "received 0 items of ancdata" bug
 
         #Progress只要使用就會消失
         #新增一個list讓progress在每個epoch都保存
         progress_list = [] #新建與清空內存
         progress_counter = 0 #只用前一萬個train discriminator, 以防overfitting
         for samples in progress:
+            print('The number is ' + str(progress_counter))
             progress_list.append(samples)
             progress_counter += 1
-            if progress_counter == 10000:
+            if progress_counter == 10:
                 break
         logger.info("Complete the progress_list")
 
