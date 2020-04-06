@@ -220,7 +220,6 @@ def main(args, init_distributed = False):
         progress_list = [] #新建與清空內存
         progress_counter = 0 #只用前一萬個train discriminator, 以防overfitting
         for samples in progress:
-            print('The number is ' + str(progress_counter))
             progress_list.append(samples)
             progress_counter += 1
             if progress_counter == 10:
