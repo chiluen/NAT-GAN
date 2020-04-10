@@ -170,7 +170,7 @@ def main(args, init_distributed = False):
     valid_subsets = args.valid_subset.split(',')
 
     # construct LSTM discriminator
-    input_size = 1 #len(task.target_dictionary)
+    input_size = 200 # embedding dimension
     output_size = 1
     hidden_size = 50
     input_vocab = task.target_dictionary
@@ -198,6 +198,7 @@ def main(args, init_distributed = False):
 
         # Initialize data iterator
         # Initialize for discriminator
+        state_dict = epoch_itr.state_dict()  #把上一階段epoch資訊留下來, 為了產生相同progress
         itr = epoch_itr.next_epoch_itr(
             fix_batches_to_gpus=args.fix_batches_to_gpus,
             shuffle=(epoch_itr.epoch >= args.curriculum),
@@ -218,7 +219,7 @@ def main(args, init_distributed = False):
         #Progress只要使用就會消失
         #新增一個list讓progress在每個epoch都保存
         progress_list = [] #新建與清空內存
-        progress_counter = 0 #只用前一萬個train discriminator, 以防overfitting
+        progress_counter = 0 #只用前一千個train discriminator, 以防overfitting
         for samples in progress:
             progress_list.append(samples)
             progress_counter += 1
@@ -227,6 +228,7 @@ def main(args, init_distributed = False):
         logger.info("Complete the progress_list")
 
         ##Construct progress for generator
+        epoch_itr.load_state_dict(state_dict) #把上一個狀態的epoch load進來
         itr = epoch_itr.next_epoch_itr(
             fix_batches_to_gpus=args.fix_batches_to_gpus,
             shuffle=(epoch_itr.epoch >= args.curriculum),
@@ -240,6 +242,7 @@ def main(args, init_distributed = False):
         progress = progress_bar.build_progress_bar( 
             args, itr, epoch_itr.epoch, no_progress_bar='simple',
         )
+        epoch_itr.epoch -= 1 # 把epoch調回來
 
         #pretrain for discriminator
         if args.pretrain_D_times > 0:

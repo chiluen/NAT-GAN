@@ -95,7 +95,7 @@ class LSTM(BaseFairseqModel):
         super().__init__()
         """
         在seq2seq NLP:
-        input_size = 1 #只有一維, 代表純粹用數字去代表
+        input_size = embed_dim #也就代表embedding的dimension, 預設是200
         output_size = 1 
         hidden_size = 10 #h的維度
         input_vocab = vocabulary
@@ -105,6 +105,7 @@ class LSTM(BaseFairseqModel):
         self.hidden_size = hidden_size
         self.input_vocab = input_vocab
 
+        self.embed = nn.Embedding(len(input_vocab), input_size)
         self.lstm = nn.LSTM(input_size, hidden_size, 1)  #LSTM(數據向量, 隱藏元向量, number of layer)
         self.linear_1 = nn.Linear(hidden_size, 5)
         self.linear_2 = nn.Linear(5, output_size)
@@ -119,19 +120,20 @@ class LSTM(BaseFairseqModel):
     def forward(self, src_tokens):
         bsz, max_src_len = src_tokens.size()
         h0, c0 = self.init_hidden(bsz, src_tokens.device)
-        input = src_tokens.float().permute(1,0) #(seq-len, bsz)
-        input = input.unsqueeze(-1)
-        input = input.to(src_tokens.device)
 
-        output, _ = self.lstm(input, (h0,c0)) # output dimension: (seq-len, bsz, hidden_size)
+        src_embed = self.embed(src_tokens) #(bsz, seq-len) -> (bsz, seq-len, embed_dim)
+        src_embed = src_embed.float().permute(1,0,2)
+        src_embed = src_embed.to(src_tokens.device)
+
+        output, _ = self.lstm(src_embed, (h0,c0)) # output dimension: (seq-len, bsz, hidden_size)
         hn = output[-1] # bsz,hidden_size
         output = []
         for i in range(bsz): #根據batch去output
             hn_temp = self.linear_1(hn[i])
             hn_temp = self.layernorm(hn_temp)
             hn_temp = self.linear_2(hn_temp)
-            hn_temp = self.sigmoid(hn_temp) #轉到(0,1)
-            hn_temp = 2*(hn_temp-0.5) #轉到(-1,1)
+            hn_temp = self.sigmoid(hn_temp) #change to (0,1)
+            hn_temp = 2*(hn_temp-0.5) #change to (-1,1)
 
             output.append(hn_temp)
         output = torch.tensor(output, device=src_tokens.device, requires_grad=True)
