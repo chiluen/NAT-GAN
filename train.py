@@ -223,7 +223,7 @@ def main(args, init_distributed = False):
         for samples in progress:
             progress_list.append(samples)
             progress_counter += 1
-            if progress_counter == 10:
+            if progress_counter == 1000:
                 break
         logger.info("Complete the progress_list")
 
