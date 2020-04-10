@@ -217,15 +217,16 @@ def main(args, init_distributed = False):
         torch.multiprocessing.set_sharing_strategy('file_system') ##fix "received 0 items of ancdata" bug
 
         #Progress只要使用就會消失
-        #新增一個list讓progress在每個epoch都保存
-        progress_list = [] #新建與清空內存
-        progress_counter = 0 #只用前一千個train discriminator, 以防overfitting
-        for samples in progress:
-            progress_list.append(samples)
-            progress_counter += 1
-            if progress_counter == 1000:
-                break
-        logger.info("Complete the progress_list")
+        #新增一個list讓progress在每個epoch都保存, only for pretrain discriminator
+        if args.pretrain_D_times > 0:
+            progress_list = [] #新建與清空內存
+            progress_counter = 0 #只用前一千個train discriminator, 以防overfitting
+            for samples in progress:
+                progress_list.append(samples)
+                progress_counter += 1
+                if progress_counter == 10:
+                    break
+            logger.info("Complete the progress_list")
 
         ##Construct progress for generator
         epoch_itr.load_state_dict(state_dict) #把上一個狀態的epoch load進來
@@ -243,6 +244,7 @@ def main(args, init_distributed = False):
             args, itr, epoch_itr.epoch, no_progress_bar='simple',
         )
         epoch_itr.epoch -= 1 # 把epoch調回來
+        
 
         #pretrain for discriminator
         if args.pretrain_D_times > 0:
@@ -253,7 +255,9 @@ def main(args, init_distributed = False):
 
             args.pretrain_D_times = 0 #Ending pretrain
 
-
+        #Training generator for one epoch
+        #stats = train_GAN(args, trainer, task, epoch_itr, Discriminator, progress)  #train for generator
+        """
         #Training generator for one epoch
         stats = train_G(args, trainer, task, epoch_itr, Discriminator, progress)  #train for generator
         
@@ -263,9 +267,35 @@ def main(args, init_distributed = False):
             for i in range(args.train_D_times_per_epoch):
                 train_D(args, trainer, task, epoch_itr, Discriminator, progress_list)  #train for discriminator
             torch.save(Discriminator.model.state_dict(), os.path.join('./NAT-GAN/discriminator_model',"param_"+str(epoch_itr.epoch)+".pkl"))
+        """
+        #loss_per_epoch.append(stats['loss']) # record loss
 
-        loss_per_epoch.append(stats['loss']) # record loss
 
+        ##testing discriminator的output
+        ##這只能搭配pretrain discriminator才能使用
+        if args.D_outputs_path != '':
+            for i, sample in enumerate(progress_list[0]):
+                sample = trainer._prepare_sample(sample)
+                sample['prev_target'] = task.inject_noise(sample['target'])
+
+                src_tokens, src_lengths = (
+                    sample["net_input"]["src_tokens"],
+                    sample["net_input"]["src_lengths"],
+                )
+                tgt_tokens, prev_output_tokens = sample["target"], sample["prev_target"]
+                outputs = trainer.model(src_tokens, src_lengths, prev_output_tokens, tgt_tokens)
+
+                batch_size = outputs['word_ins'].get("out").shape[0]
+                outputs_argmax = change_output2target(outputs, batch_size)
+
+                output_reward = Discriminator.model(outputs_argmax)
+                output_reward = np.array(output_reward.cpu().detach())
+                np.savetxt(os.path.join(args.D_outputs_path,"output_"+str(epoch_itr.epoch)+".txt"),output_reward)
+
+                target_reward = Discriminator.model(sample['target'])
+                target_reward = np.array(target_reward.cpu().detach())
+                np.savetxt(os.path.join(args.D_outputs_path,"target_"+str(epoch_itr.epoch)+".txt"),target_reward)
+        print('finish')
         #用validate_interval去控制多少epoch後要去算validate
         if not args.disable_validation and epoch_itr.epoch % args.validate_interval == 0:
             valid_losses = validate(args, trainer, task, epoch_itr, valid_subsets)
@@ -310,10 +340,21 @@ def main(args, init_distributed = False):
     logger.info('done training in {:.1f} seconds'.format(train_meter.sum))
 
 
+def change_output2target(outputs, batch_size): 
+    outputs = outputs['word_ins']['out']
+    outputs_argmax = torch.max(outputs[0], dim = 1)[1].reshape(1,-1)
+    for i in range(1, batch_size):
+        indice = torch.max(outputs[i], dim = 1)[1].reshape(1,-1)
+        outputs_argmax = torch.cat((outputs_argmax, indice))
+    return outputs_argmax
+
+
+
 #train.train_D
 def train_D(args, trainer, task, epoch_itr, discriminator, progress):
-    """Train the discriminator for one epoch"""
+    """Train the discriminator for one epoch or one batch"""
 
+    """
     def change_output2target(outputs, batch_size): 
         outputs = outputs['word_ins']['out']
         outputs_argmax = torch.max(outputs[0], dim = 1)[1].reshape(1,-1)
@@ -321,6 +362,7 @@ def train_D(args, trainer, task, epoch_itr, discriminator, progress):
             indice = torch.max(outputs[i], dim = 1)[1].reshape(1,-1)
             outputs_argmax = torch.cat((outputs_argmax, indice))
         return outputs_argmax
+    """
 
     generator = trainer.model
     
@@ -390,6 +432,57 @@ def train_G(args, trainer, task, epoch_itr, discriminator, progress):
 
     # reset epoch-level meters
     metrics.reset_meters('train')
+
+    return stats
+
+#train G and Discriminator
+@metrics.aggregate('train')
+def train_GAN(args, trainer, task, epoch_itr, discriminator, progress):
+    """Train the model for one epoch."""
+
+    print('Training on Discriminator for ' + str(args.train_D_times_per_batch) + " times")
+    task.begin_epoch(epoch_itr.epoch, trainer.get_model())
+
+    valid_subsets = args.valid_subset.split(',')
+    max_update = args.max_update or math.inf
+    for samples in progress:
+        with metrics.aggregate('train_inner'):
+            log_output = train_step_GAN(args, trainer, samples, discriminator)    #已改完, 並且test可行
+
+            #train discriminator n_times for one epoch
+            if args.only_G == False:
+                for i in range(args.train_D_times_per_batch):
+                    train_D(args, trainer,task, epoch_itr, discriminator, [samples])
+                
+            num_updates = trainer.get_num_updates()
+            if log_output is None:
+                continue
+
+            # log mid-epoch stats
+            stats = get_training_stats('train_inner')
+            progress.log(stats, tag='train', step=num_updates)
+
+            if (
+                not args.disable_validation
+                and args.save_interval_updates > 0
+                and num_updates % args.save_interval_updates == 0
+                and num_updates > 0
+            ):
+                valid_losses = validate(args, trainer, task, epoch_itr, valid_subsets)
+                checkpoint_utils.save_checkpoint(args, trainer, epoch_itr, valid_losses[0])
+
+            if num_updates >= max_update:
+                break
+    
+    # log end-of-epoch stats
+    stats = get_training_stats('train')
+    progress.print(stats, tag='train', step=num_updates)
+
+    # reset epoch-level meters
+    metrics.reset_meters('train')
+
+    #save discriminator
+    torch.save(discriminator.model.state_dict(), os.path.join('./NAT-GAN/discriminator_model',"param_"+str(epoch_itr.epoch)+".pkl"))
 
     return stats
 
@@ -494,10 +587,11 @@ if __name__ == '__main__':
     parser.add_argument('--save-loss-dir', type = str)  #要放絕對路徑
     parser.add_argument('--only-G', action = 'store_true') #用來只train Generator
     parser.add_argument('--pretrain-D-times', type = int, default = 0)
-    parser.add_argument('--train-D-times-per-epoch', type = int, default = 1)
+    parser.add_argument('--train-D-times-per-batch', type = int, default = 1)
     parser.add_argument('--discriminator-path', type = str, default = '') #loading trained discriminator
     parser.add_argument('--current-epoch', type = int, default=0) #for convenient
     parser.add_argument('--apply-reward-scalar', action = 'store_true')
+    parser.add_argument('--D-outputs-path', type = str, default='')
 
 
     args = parser.parse_args()
