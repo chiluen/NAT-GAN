@@ -224,7 +224,7 @@ def main(args, init_distributed = False):
             for samples in progress:
                 progress_list.append(samples)
                 progress_counter += 1
-                if progress_counter == 10:
+                if progress_counter == 1000:
                     break
             logger.info("Complete the progress_list")
 
@@ -243,7 +243,7 @@ def main(args, init_distributed = False):
         progress = progress_bar.build_progress_bar( 
             args, itr, epoch_itr.epoch, no_progress_bar='simple',
         )
-        epoch_itr.epoch -= 1 # 把epoch調回來
+        #epoch_itr.epoch -= 1 # 把epoch調回來
         
 
         #pretrain for discriminator
@@ -256,7 +256,7 @@ def main(args, init_distributed = False):
             args.pretrain_D_times = 0 #Ending pretrain
 
         #Training generator for one epoch
-        #stats = train_GAN(args, trainer, task, epoch_itr, Discriminator, progress)  #train for generator
+        stats = train_GAN(args, trainer, task, epoch_itr, Discriminator, progress)  #train for generator
         """
         #Training generator for one epoch
         stats = train_G(args, trainer, task, epoch_itr, Discriminator, progress)  #train for generator
@@ -268,8 +268,7 @@ def main(args, init_distributed = False):
                 train_D(args, trainer, task, epoch_itr, Discriminator, progress_list)  #train for discriminator
             torch.save(Discriminator.model.state_dict(), os.path.join('./NAT-GAN/discriminator_model',"param_"+str(epoch_itr.epoch)+".pkl"))
         """
-        #loss_per_epoch.append(stats['loss']) # record loss
-
+        loss_per_epoch.append(stats['loss']) # record loss
 
         ##testing discriminator的output
         ##這只能搭配pretrain discriminator才能使用
@@ -295,7 +294,7 @@ def main(args, init_distributed = False):
                 target_reward = Discriminator.model(sample['target'])
                 target_reward = np.array(target_reward.cpu().detach())
                 np.savetxt(os.path.join(args.D_outputs_path,"target_"+str(epoch_itr.epoch)+".txt"),target_reward)
-        print('finish')
+
         #用validate_interval去控制多少epoch後要去算validate
         if not args.disable_validation and epoch_itr.epoch % args.validate_interval == 0:
             valid_losses = validate(args, trainer, task, epoch_itr, valid_subsets)
