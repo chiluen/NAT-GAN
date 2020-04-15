@@ -133,7 +133,7 @@ class LSTM(BaseFairseqModel):
             hn_temp = self.layernorm(hn_temp)
             hn_temp = self.linear_2(hn_temp)
             hn_temp = self.sigmoid(hn_temp) #change to (0,1)
-            hn_temp = 2*(hn_temp-0.5) #change to (-1,1)
+            #hn_temp = 2*(hn_temp-0.5) #change to (-1,1)
 
             output.append(hn_temp)
         output = torch.tensor(output, device=src_tokens.device, requires_grad=True)
@@ -165,8 +165,8 @@ class LSTM_Discriminator():
         #再進行target_G
         optimizer.zero_grad()
         output_D = self.model(target_G)
-        #這邊錯誤的標籤用-1去做, 不要用0, 解決資訊問題
-        output_D_target = torch.full([output_D.shape[0]],-1).cuda() 
+        #錯誤的標籤用0, 之後output再轉成(-1,1)
+        output_D_target = torch.full([output_D.shape[0]],0).cuda() 
         loss = loss_function(output_D, output_D_target)
         loss.backward()
         optimizer.step()

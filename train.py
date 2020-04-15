@@ -170,7 +170,7 @@ def main(args, init_distributed = False):
     valid_subsets = args.valid_subset.split(',')
 
     # construct LSTM discriminator
-    input_size = 200 # embedding dimension
+    input_size = 256 # embedding dimension
     output_size = 1
     hidden_size = 50
     input_vocab = task.target_dictionary
@@ -251,7 +251,7 @@ def main(args, init_distributed = False):
             logger.info('Pretrain ' + str(args.pretrain_D_times) + ' for discriminator')
             for i in range(args.pretrain_D_times):
                 train_D(args, trainer, task, epoch_itr, Discriminator, progress_list)
-                logger.info('Pretrain on Discriminator for ' + str(i) + " times")
+                logger.info('Pretrain on Discriminator for ' + str(i+1) + " times")
 
             args.pretrain_D_times = 0 #Ending pretrain
 
@@ -294,6 +294,9 @@ def main(args, init_distributed = False):
                 target_reward = Discriminator.model(sample['target'])
                 target_reward = np.array(target_reward.cpu().detach())
                 np.savetxt(os.path.join(args.D_outputs_path,"target_"+str(epoch_itr.epoch)+".txt"),target_reward)
+                if output_reward.mean() <= -0.5 and target_reward.mean() >= 0.5: #testing convergence
+                    print('done')
+                    os._exit()
 
         #用validate_interval去控制多少epoch後要去算validate
         if not args.disable_validation and epoch_itr.epoch % args.validate_interval == 0:

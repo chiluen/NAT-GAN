@@ -90,6 +90,7 @@ def _compute_loss(args, outputs, targets, reward, mode='word_ins', masks=None, l
             ## adding mode for discriminator rewards
             if mode == 'word_ins': #for word
                 nll_loss = reward_losses(args, losses, reward, batch_size, length)
+                #nll_loss = mean_ds(losses)
             else: # for length
                 nll_loss = mean_ds(losses)
         else:
@@ -131,6 +132,7 @@ def criterion_GAN(args, model, discriminator, sample, task,reduce = True):
     batch_size, length = src_tokens.size()
     outputs_argmax = change_output2target(outputs, batch_size) #把outputs轉成跟target token一樣的形式
     reward = discriminator.model(outputs_argmax) #len of reward = batch_size
+    reward = 2*(reward - 0.5) #change to (-1,1)
 
     for obj in outputs: #word_ins/ length
         if outputs[obj].get("loss", None) is None:  #其實兩個都是None
