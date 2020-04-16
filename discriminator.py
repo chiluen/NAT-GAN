@@ -6,64 +6,55 @@ from fairseq.models import BaseFairseqModel
 #discriminator setting
 #Discriminator
 class RNN(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
-        super().__init__()
-
-        self.hidden_size = hidden_size
-
-        self.i2h = nn.Linear(input_size + hidden_size, hidden_size)
-        self.i2o = nn.Linear(input_size + hidden_size, output_size)
-        self.softmax = nn.LogSoftmax(dim=1)
-
-    def forward(self, input, hidden):
-        combined = torch.cat((input, hidden), 1)
-        hidden = self.i2h(combined)
-        output = self.i2o(combined)
-        output = self.softmax(output)
-        return output, hidden
-
-    def initHidden(self):
-        return torch.zeros(1, self.hidden_size)
-
-class FairseqRNNClassifier(BaseFairseqModel):
-
     def __init__(self, input_size, output_size, hidden_size, input_vocab):
         super().__init__()
+        """
+        在seq2seq NLP:
+        input_size = embed_dim #也就代表embedding的dimension, 預設是256
+        output_size = 1 
+        hidden_size = 10 #h的維度
+        input_vocab = vocabulary
+        """
+        self.input_size = input_size
+        self.output_size = output_size
+        self.hidden_size = hidden_size
+        self.input_vocab = input_vocab
+        self.n_layers = 3
 
-        self.rnn = RNN(input_size=input_size,  #要把model放到cuda裡面
-                       hidden_size=hidden_size,
-                       output_size=output_size,
-                       ).cuda()
-        self.input_vocab = input_vocab #用來做one hot encoder的東西, 用target的dictionary來做
-        self.register_buffer('one_hot_inputs', torch.eye(len(input_vocab)))
+        self.embed = nn.Embedding(len(input_vocab), input_size)
+        self.rnn = nn.RNN(input_size, hidden_size, num_layers=self.n_layers)  #LSTM(數據向量, 隱藏元向量, number of layer)
+        self.linear = nn.Linear(hidden_size, output_size)
+        self.layernorm = nn.LayerNorm(normalized_shape = 5)
+        self.sigmoid = nn.Sigmoid()
 
+    def init_hidden(self, bsz, device):
+        h0 = torch.randn(self.n_layers, bsz, self.hidden_size, device=device) 
+        return h0
 
+        #(seq_len, batch_size, input_size)
     def forward(self, src_tokens):
-
-        #src_tokens.shape = (batch, src_len)
-        #src_lengths.shape = (batch)
         bsz, max_src_len = src_tokens.size()
+        h0 = self.init_hidden(bsz, src_tokens.device)
 
-        #initialize hidden state
-        hidden = self.rnn.initHidden()
-        hidden = hidden.repeat(bsz, 1)  # expand for batched inputs
-        hidden = hidden.to(src_tokens.device)  # move to GPU
+        src_embed = self.embed(src_tokens) #(bsz, seq-len) -> (bsz, seq-len, embed_dim)
+        src_embed = src_embed.float().permute(1,0,2) #(seq_len, bsz, hidden_size)
+        src_embed = src_embed.to(src_tokens.device)
 
-        for i in range(max_src_len):
-            input = self.one_hot_inputs[src_tokens[:, i].long()]# One-hot encode a batch of input characters.
-            input = input.to(src_tokens.device)
-            output, hidden = self.rnn(input, hidden)# Feed the input to our RNN.
+        output, _ = self.rnn(src_embed, h0) # output dimension: (seq-len, bsz, hidden_size)
 
+        hn = output[-1] # bsz,hidden_size
+        output = self.linear(hn)
+        output = output.squeeze() #把維度為1的去除
+        
         return output
-
-
+        
 class RNN_Discriminator():
     def __init__(self, input_size, output_size, hidden_size, input_vocab):
         self.input_size = input_size
         self.output_size = output_size
         self.hidden_size = hidden_size
         self.input_vocab = input_vocab
-        self.model = FairseqRNNClassifier(input_size, output_size, hidden_size, input_vocab)
+        self.model = RNN(input_size, output_size, hidden_size, input_vocab).cuda()
 
   #在train時, 直接吃target sentence
     def train(self, target_Real, target_G):  
@@ -74,7 +65,7 @@ class RNN_Discriminator():
     #先進行target_real
         optimizer.zero_grad()
         output_D = self.model(target_Real)
-        output_D_target = torch.full([output_D.shape[0],1],1).cuda()
+        output_D_target = torch.full([output_D.shape[0]],1).cuda()
         loss = loss_function(output_D, output_D_target)
         loss.backward()
         optimizer.step()
@@ -82,15 +73,14 @@ class RNN_Discriminator():
         #再進行target_G
         optimizer.zero_grad()
         output_D = self.model(target_G)
-        #這邊錯誤的標籤用-1去做, 不要用0, 解決資訊問題
-        output_D_target = torch.full([output_D.shape[0],1],-1).cuda() 
+        output_D_target = torch.full([output_D.shape[0]],0).cuda() 
         loss = loss_function(output_D, output_D_target)
         loss.backward()
         optimizer.step()
 
 ##LSTM discriminator
 
-class LSTM(BaseFairseqModel):
+class LSTM(nn.Module):
     def __init__(self, input_size, output_size, hidden_size, input_vocab):
         super().__init__()
         """
@@ -125,18 +115,14 @@ class LSTM(BaseFairseqModel):
         src_embed = src_embed.float().permute(1,0,2)
         src_embed = src_embed.to(src_tokens.device)
 
+
         output, _ = self.lstm(src_embed, (h0,c0)) # output dimension: (seq-len, bsz, hidden_size)
         hn = output[-1] # bsz,hidden_size
-        output = []
-        for i in range(bsz): #根據batch去output
-            hn_temp = self.linear_1(hn[i])
-            hn_temp = self.layernorm(hn_temp)
-            hn_temp = self.linear_2(hn_temp)
-            hn_temp = self.sigmoid(hn_temp) #change to (0,1)
-            #hn_temp = 2*(hn_temp-0.5) #change to (-1,1)
 
-            output.append(hn_temp)
-        output = torch.tensor(output, device=src_tokens.device, requires_grad=True)
+        output = self.linear_1(hn)
+        output = self.layernorm(output)
+        output = self.linear_2(output)
+        output = output.squeeze() #把維度為1的去除
         
         return output
 
@@ -165,7 +151,6 @@ class LSTM_Discriminator():
         #再進行target_G
         optimizer.zero_grad()
         output_D = self.model(target_G)
-        #錯誤的標籤用0, 之後output再轉成(-1,1)
         output_D_target = torch.full([output_D.shape[0]],0).cuda() 
         loss = loss_function(output_D, output_D_target)
         loss.backward()
