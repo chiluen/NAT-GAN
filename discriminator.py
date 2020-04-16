@@ -44,6 +44,7 @@ class RNN(nn.Module):
 
         hn = output[-1] # bsz,hidden_size
         output = self.linear(hn)
+        output = self.sigmoid(output)
         output = output.squeeze() #把維度為1的去除
         
         return output
@@ -115,13 +116,13 @@ class LSTM(nn.Module):
         src_embed = src_embed.float().permute(1,0,2)
         src_embed = src_embed.to(src_tokens.device)
 
-
         output, _ = self.lstm(src_embed, (h0,c0)) # output dimension: (seq-len, bsz, hidden_size)
         hn = output[-1] # bsz,hidden_size
 
         output = self.linear_1(hn)
         output = self.layernorm(output)
         output = self.linear_2(output)
+        output = self.sigmoid(output)
         output = output.squeeze() #把維度為1的去除
         
         return output
