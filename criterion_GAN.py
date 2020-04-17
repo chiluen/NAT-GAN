@@ -34,7 +34,7 @@ def _compute_loss(args, outputs, targets, reward, mode='word_ins', masks=None, l
 
         head_loc = 0
         losses_list = []
-        reward_scalar = 1 - ((args.max_epoch - args.current_epoch) / args.max_epoch)
+        #reward_scalar = 1 - ((args.max_epoch - args.current_epoch) / args.max_epoch)
 
         for i in range(batch_size):
             losses_sentence = 0

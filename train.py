@@ -170,11 +170,15 @@ def main(args, init_distributed = False):
     valid_subsets = args.valid_subset.split(',')
 
     # construct LSTM discriminator
-    input_size = 256 # embedding dimension
+    input_size = 512 # embedding dimension
     output_size = 1
-    hidden_size = 50
+    hidden_size = 512
     input_vocab = task.target_dictionary
-    Discriminator = LSTM_Discriminator(input_size, output_size, hidden_size, input_vocab)
+    if args.D_type == 'LSTM':
+        Discriminator = LSTM_Discriminator(input_size, output_size, hidden_size, input_vocab)
+    else:
+        Discriminator = RNN_Discriminator(input_size, output_size, hidden_size, input_vocab)
+    
     if args.discriminator_path != '':
         Discriminator.model.load_state_dict(torch.load(args.discriminator_path))
 
@@ -594,6 +598,7 @@ if __name__ == '__main__':
     parser.add_argument('--current-epoch', type = int, default=0) #for convenient
     parser.add_argument('--apply-reward-scalar', action = 'store_true')
     parser.add_argument('--D-outputs-path', type = str, default='')
+    parser.add_argument('--D-type', type = str, default='LSTM')
 
 
     args = parser.parse_args()

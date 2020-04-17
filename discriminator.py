@@ -95,17 +95,18 @@ class LSTM(nn.Module):
         self.output_size = output_size
         self.hidden_size = hidden_size
         self.input_vocab = input_vocab
+        self.n_layers = 3
 
         self.embed = nn.Embedding(len(input_vocab), input_size)
-        self.lstm = nn.LSTM(input_size, hidden_size, 1)  #LSTM(數據向量, 隱藏元向量, number of layer)
+        self.lstm = nn.LSTM(input_size, hidden_size, self.n_layers)  #LSTM(數據向量, 隱藏元向量, number of layer)
         self.linear_1 = nn.Linear(hidden_size, 5)
         self.linear_2 = nn.Linear(5, output_size)
         self.layernorm = nn.LayerNorm(normalized_shape = 5)
         self.sigmoid = nn.Sigmoid()
 
     def init_hidden(self, bsz, device):
-        h0 = torch.randn(1, bsz, self.hidden_size, device=device) #1是指number of layer
-        c0 = torch.randn(1, bsz, self.hidden_size, device=device)
+        h0 = torch.randn(self.n_layers, bsz, self.hidden_size, device=device) #1是指number of layer
+        c0 = torch.randn(self.n_layers, bsz, self.hidden_size, device=device)
         return h0, c0
 
     def forward(self, src_tokens):
